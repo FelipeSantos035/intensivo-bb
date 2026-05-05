@@ -202,7 +202,7 @@ function fmtFull(s){
 }
 
 // STATE - persists via localStorage
-var STATE={startDate:null,done:{},skipped:{},view:"schedule",expanded:{}};
+var STATE={startDate:null,done:{},skipped:{},aula:{},exercicio:{},view:"schedule",expanded:{}};
 var REDLOG={};
 var TAFLOG={};
 function save(){try{localStorage.setItem("ibb60s",JSON.stringify(STATE));}catch(e){}}
@@ -212,28 +212,85 @@ function loadAll(){
   try{var s=localStorage.getItem("ibb60s");if(s)STATE=JSON.parse(s);}catch(e){}
   try{var r=localStorage.getItem("ibb60r");if(r)REDLOG=JSON.parse(r);}catch(e){}
   try{var t=localStorage.getItem("ibb60t");if(t)TAFLOG=JSON.parse(t);}catch(e){}
+  // Ensure new fields always exist (backward compat with old localStorage data)
+  if(!STATE.aula)STATE.aula={};
+  if(!STATE.exercicio)STATE.exercicio={};
+  if(!STATE.expanded)STATE.expanded={};
+  if(!STATE.skipped)STATE.skipped={};
+  if(!STATE.done)STATE.done={};
+  if(!STATE.modeloExpanded)STATE.modeloExpanded={};
 }
 loadAll();
 
 // SMART SCHEDULER - 60 days, auto-compact if behind
 function buildSchedule(){
   var today=todayStr();
-  var endDate=addDays(STATE.startDate,59); // 60 days
+  var endDate=addDays(STATE.startDate,59);
   var daysLeft=Math.max(1,diffDays(today,endDate)+1);
-  // Collect pending codes in MASTER order
-  var pending=[];
-  for(var i=0;i<ALL_CODES.length;i++){if(!STATE.done[ALL_CODES[i]])pending.push(ALL_CODES[i]);}
-  var perDay=Math.max(2,Math.ceil(pending.length/daysLeft));
-  var isCompacted=(perDay>2);
-  var days=[],ci=0,dayNum=1;
-  var cur=today;
-  while(ci<pending.length){
-    var sl=pending.slice(ci,ci+perDay);ci+=perDay;
-    days.push({n:dayNum++,date:cur,codes:sl,rev:false});
-    cur=addDays(cur,1);
+
+  // STEP 1: Build the FIXED original schedule (never changes)
+  // Each day gets exactly the MASTER pairs assigned from the start
+  var originalDays=[];
+  for(var i=0;i<MASTER.length;i++){
+    var date=addDays(STATE.startDate,i);
+    originalDays.push({n:i+1, date:date, codes:MASTER[i], rev:false});
   }
+
+  // STEP 2: Find today's index in the original schedule
+  var todayIdx=-1;
+  for(var i=0;i<originalDays.length;i++){
+    if(originalDays[i].date===today){todayIdx=i;break;}
+  }
+
+  // STEP 3: Collect pending codes from TODAY onwards only
+  // (past days stay as-is, we don't redistribute them)
+  var pendingFromToday=[];
+  if(todayIdx>=0){
+    for(var i=todayIdx;i<originalDays.length;i++){
+      var dayCodes=originalDays[i].codes;
+      for(var j=0;j<dayCodes.length;j++){
+        if(!STATE.done[dayCodes[j]])pendingFromToday.push(dayCodes[j]);
+      }
+    }
+  } else if(todayIdx===-1 && diffDays(STATE.startDate,today)<0){
+    // today is before start - show full original
+    return{days:originalDays,endDate:endDate,isCompacted:false,perDay:2,
+           pending:ALL_CODES.length,daysLeft:daysLeft};
+  }
+
+  // STEP 4: Check if compaction needed for future days
+  var futureDays=Math.max(1,originalDays.length-(todayIdx>=0?todayIdx:0));
+  var perDay=Math.max(2,Math.ceil(pendingFromToday.length/Math.max(1,daysLeft)));
+  var isCompacted=(perDay>2);
+
+  // STEP 5: Build final schedule
+  // Past days: keep original assignment (show what was supposed to be done)
+  // Today + future: if not compacted, keep original; if compacted, redistribute pending
+  var days=[];
+
+  // Add past days as-is
+  var pastEnd=(todayIdx>=0)?todayIdx:0;
+  for(var i=0;i<pastEnd;i++){
+    days.push(originalDays[i]);
+  }
+
+  if(!isCompacted){
+    // No compaction needed - show original schedule from today onwards
+    for(var i=pastEnd;i<originalDays.length;i++){
+      days.push(originalDays[i]);
+    }
+  } else {
+    // Compact: redistribute pending from today onwards
+    var ci=0,dayNum=pastEnd+1,cur=today;
+    while(ci<pendingFromToday.length){
+      var sl=pendingFromToday.slice(ci,ci+perDay);ci+=perDay;
+      days.push({n:dayNum++,date:cur,codes:sl,rev:false});
+      cur=addDays(cur,1);
+    }
+  }
+
   return{days:days,endDate:endDate,isCompacted:isCompacted,perDay:perDay,
-         pending:pending.length,daysLeft:daysLeft};
+         pending:pendingFromToday.length,daysLeft:daysLeft};
 }
 
 function el(id){return document.getElementById(id);}
@@ -368,10 +425,12 @@ function renderDay(day,today){
   for(var i=0;i<day.codes.length;i++){if(STATE.done[day.codes[i]])doneC++;if(STATE.skipped[day.codes[i]])skipC++;}
   var allDone=(day.codes.length>0&&doneC===day.codes.length);
   var compact=(day.codes.length>2);
+  var anyProgress=false;
+  for(var _pi=0;_pi<day.codes.length;_pi++){if(STATE.aula[day.codes[_pi]]||STATE.exercicio[day.codes[_pi]])anyProgress=true;}
   var bc="#334155";
   if(allDone)bc="#22C55E";
   else if(skipC>0)bc="#EF4444";
-  else if(doneC>0)bc="#F59E0B";
+  else if(anyProgress)bc="#F59E0B";
   else if(isToday)bc="#3B82F6";
   var exp=STATE.expanded[day.n];
   var cc=isToday?"#60A5FA":bc;
@@ -383,7 +442,17 @@ function renderDay(day,today){
     chips+='<span style="font-size:11px;font-weight:700;padding:2px 7px;border-radius:5px;border:1px solid '+(d?col+"55":sk?"#EF444444":col+"22")+';background:'+(d?col+"33":sk?"#EF444422":col+"15")+';color:'+(d?col:sk?"#EF4444":col+"bb")+';text-decoration:'+(sk?"line-through":"none")+'">'+c+'</span>';
   }
   if(compact)chips+='<span style="font-size:9px;font-weight:800;color:#F59E0B;background:#F59E0B15;border:1px solid #F59E0B33;border-radius:4px;padding:1px 5px;margin-left:4px">+MAT</span>';
-  var counter='<div style="flex-shrink:0;text-align:right;font-size:11px;font-weight:700;color:'+bc+'">'+doneC+'/'+day.codes.length+(skipC>0?'<div style="font-size:10px;color:#EF4444">'+skipC+'skip</div>':'')+'</div>';
+  var aulaC=0,exC=0;
+  for(var _ci=0;_ci<day.codes.length;_ci++){
+    if(STATE.aula[day.codes[_ci]])aulaC++;
+    if(STATE.exercicio[day.codes[_ci]])exC++;
+  }
+  var cTxt=allDone
+    ?'<div style="font-size:11px;font-weight:800;color:#22C55E">Completo</div>'
+    :'<div style="font-size:10px;font-weight:700;color:#60A5FA">A:'+aulaC+'/'+day.codes.length+'</div>'
+     +'<div style="font-size:10px;font-weight:700;color:#F59E0B">E:'+exC+'/'+day.codes.length+'</div>'
+     +(skipC>0?'<div style="font-size:10px;color:#EF4444">'+skipC+' skip</div>':'');
+  var counter='<div style="flex-shrink:0;text-align:right">'+cTxt+'</div>';
   var arrow='<div style="font-size:14px;color:#334155;flex-shrink:0;transition:transform .2s;margin-left:4px'+(exp?';transform:rotate(180deg)':'')+'">&#9662;</div>';
   var body="";
   if(exp){
@@ -405,25 +474,63 @@ function renderDay(day,today){
 function renderChip(code){
   var pfx=getPrefix(code);var color=subjectColors[pfx]||"#64748B";
   var prof=professors[pfx]||"";var name=contentMap[code]||code;
-  var isDone=STATE.done[code];var isSk=STATE.skipped[code];
+  var hasAula=!!(STATE.aula&&STATE.aula[code]);
+  var hasEx=!!(STATE.exercicio&&STATE.exercicio[code]);
+  var isSk=!!(STATE.skipped&&STATE.skipped[code]);
+  var isDone=(hasAula&&hasEx);
+  if(isDone&&STATE.done)STATE.done[code]=true;
+
+  var bdr=isDone?color+"55":isSk?"#EF444433":(hasAula||hasEx)?color+"33":"#1E293B";
   var bg=isDone?color+"14":isSk?"#EF444410":"#0B1220";
-  var bdr=isDone?color+"55":isSk?"#EF444433":"#1E293B";
   var cc=isDone?color:isSk?"#EF4444":"#94A3B8";
   var nc=isDone?color+"99":isSk?"#EF444466":"#475569";
   var td=isSk?"line-through":"none";
-  var bdb=isDone?color:"#1E293B";var bdc=isDone?"#fff":"#64748B";
-  var bsb=isSk?"#EF4444":"#1E293B";var bsc=isSk?"#fff":"#64748B";
-  return '<div style="display:flex;align-items:center;gap:8px;border-radius:10px;padding:9px 12px;border:1px solid '+bdr+';background:'+bg+'">'
+  var skBg=isSk?"#EF4444":"#1E293B";var skCol=isSk?"#fff":"#64748B";
+
+  var statusTag="";
+  if(isDone)statusTag='<span style="font-size:9px;color:'+color+';background:'+color+'18;border-radius:4px;padding:1px 5px;font-weight:800;margin-left:4px">OK</span>';
+  else if(hasAula&&!hasEx)statusTag='<span style="font-size:9px;color:#F59E0B;background:#F59E0B15;border-radius:4px;padding:1px 5px;font-weight:800;margin-left:4px">falta exercicios</span>';
+  else if(!hasAula&&hasEx)statusTag='<span style="font-size:9px;color:'+color+';background:'+color+'15;border-radius:4px;padding:1px 5px;font-weight:800;margin-left:4px">falta aula</span>';
+
+  // Use ID-based approach for reliable onclick
+  var uid="chip_"+code.replace(/[^a-zA-Z0-9]/g,"_");
+
+  var html='<div id="'+uid+'" style="border-radius:10px;border:1px solid '+bdr+';background:'+bg+';overflow:hidden;margin-bottom:1px">'
+    // Top row: code + name + skip btn
+    +'<div style="display:flex;align-items:center;gap:8px;padding:9px 12px">'
     +'<div style="flex:1;min-width:0">'
-    +'<div><span style="font-size:13px;font-weight:800;color:'+cc+';text-decoration:'+td+'">'+code+'</span>'
-    +'<span style="font-size:10px;color:'+color+'99;background:'+color+'15;border:1px solid '+color+'22;border-radius:4px;padding:1px 6px;font-weight:600;margin-left:6px">'+prof+'</span></div>'
+    +'<div style="display:flex;align-items:center;flex-wrap:wrap;gap:4px">'
+    +'<span style="font-size:13px;font-weight:800;color:'+cc+';text-decoration:'+td+'">'+code+'</span>'
+    +'<span style="font-size:10px;color:'+color+'99;background:'+color+'15;border:1px solid '+color+'22;border-radius:4px;padding:1px 5px;font-weight:600">'+prof+'</span>'
+    +statusTag+'</div>'
     +'<div style="font-size:11px;margin-top:2px;line-height:1.3;color:'+nc+';text-decoration:'+td+'">'+name+'</div>'
     +'</div>'
-    +'<div style="display:flex;gap:5px;flex-shrink:0">'
-    +'<button onclick="markDone(\''+code+'\')" style="width:32px;height:32px;border-radius:8px;border:none;font-size:15px;display:flex;align-items:center;justify-content:center;background:'+bdb+';color:'+bdc+'">&#10003;</button>'
-    +'<button onclick="markSkip(\''+code+'\')" style="width:32px;height:32px;border-radius:8px;border:none;font-size:15px;display:flex;align-items:center;justify-content:center;background:'+bsb+';color:'+bsc+'">&#10005;</button>'
-    +'</div></div>';
+    +'<button id="skip_'+uid+'" style="width:26px;height:26px;border-radius:6px;border:none;font-size:12px;display:flex;align-items:center;justify-content:center;background:'+skBg+';color:'+skCol+';flex-shrink:0;cursor:pointer">&#10005;</button>'
+    +'</div>'
+    // Bottom row: aula + exercicio
+    +'<div style="display:flex;border-top:1px solid '+(isDone?color+'22':'#1E293B')+'">'
+    +'<button id="aula_'+uid+'" style="flex:1;padding:9px 6px;border:none;border-right:1px solid '+(isDone?color+'22':'#1E293B')+';background:'+(hasAula?color+'1A':'transparent')+';color:'+(hasAula?color:'#475569')+';font-size:12px;font-weight:700;display:flex;align-items:center;justify-content:center;gap:6px;cursor:pointer;">'
+    +'<span style="width:17px;height:17px;border-radius:4px;border:2px solid '+(hasAula?color:'#334155')+';background:'+(hasAula?color:'transparent')+';display:flex;align-items:center;justify-content:center;font-size:11px;color:#fff;flex-shrink:0">'+(hasAula?'&#10003;':'')+'</span>'
+    +'Assisti aula</button>'
+    +'<button id="ex_'+uid+'" style="flex:1;padding:9px 6px;border:none;background:'+(hasEx?'#F59E0B1A':'transparent')+';color:'+(hasEx?'#F59E0B':'#475569')+';font-size:12px;font-weight:700;display:flex;align-items:center;justify-content:center;gap:6px;cursor:pointer;">'
+    +'<span style="width:17px;height:17px;border-radius:4px;border:2px solid '+(hasEx?'#F59E0B':'#334155')+';background:'+(hasEx?'#F59E0B':'transparent')+';display:flex;align-items:center;justify-content:center;font-size:11px;color:#fff;flex-shrink:0">'+(hasEx?'&#10003;':'')+'</span>'
+    +'Exercicios</button>'
+    +'</div>'
+    +'</div>';
+
+  // Attach events after render
+  setTimeout(function(){
+    var skipBtn=document.getElementById("skip_"+uid);
+    var aulaBtn=document.getElementById("aula_"+uid);
+    var exBtn=document.getElementById("ex_"+uid);
+    if(skipBtn){skipBtn.addEventListener("click",function(e){e.stopPropagation();markSkip(code);});}
+    if(aulaBtn){aulaBtn.addEventListener("click",function(e){e.stopPropagation();toggleAula(code);});}
+    if(exBtn){exBtn.addEventListener("click",function(e){e.stopPropagation();toggleEx(code);});}
+  },0);
+
+  return html;
 }
+
 
 function renderPending(){
   var list=[];for(var k in STATE.skipped){if(STATE.skipped[k])list.push(k);}
@@ -482,23 +589,305 @@ function renderProgress(){
 }
 
 function renderRedacao(){
+  var sub=STATE.redacaoSub||"modelo";
+  var tabs=[
+    {id:"modelo",  lb:"Gerar Modelo"},
+    {id:"corrigir",lb:"Corrigir Minha"},
+    {id:"treinos", lb:"Meus Treinos"}
+  ];
+  var th="";
+  for(var i=0;i<tabs.length;i++){
+    var t=tabs[i];var active=(sub===t.id);
+    th+='<button onclick="setRedSub(\''+t.id+'\')" style="flex:1;padding:8px;border-radius:8px;border:none;cursor:pointer;font-size:12px;font-weight:700;background:'+(active?"#F472B6":"#1E293B")+';color:'+(active?"#000":"#64748B")+'">'+t.lb+'</button>';
+  }
+  var html='<div style="font-size:15px;font-weight:800;color:#F1F5F9;margin-bottom:12px">Redacao com IA</div>'
+    +'<div style="display:flex;gap:6px;margin-bottom:16px">'+th+'</div>';
+
+  if(sub==="modelo") html+=renderRedacaoModelo();
+  else if(sub==="corrigir") html+=renderRedacaoCorrigir();
+  else html+=renderRedacaoTreinos();
+  return html;
+}
+
+function setRedSub(s){STATE.redacaoSub=s;save();renderApp();}
+
+// -- GERAR MODELO --------------------------------------------------------------
+function renderRedacaoModelo(){
+  var temas=[
+    "Como lidar com o estresse financeiro em uma sociedade consumista?",
+    "Atletas nas redes sociais: prejudicios a saude mental vs. exposicao digital",
+    "Vicio em jogos eletronicos: quem deve proteger criancas e adolescentes?",
+    "Trabalho por aplicativos: modernizacao ou precarizacao das relacoes?",
+    "Saude mental nas forcas de seguranca: um desafio institucional",
+    "Reconhecimento facial pela policia: seguranca ou ameaca a privacidade?",
+    "Violencia domestica: responsabilidade do Estado e da sociedade",
+    "Fake news e responsabilidade das redes sociais na democracia",
+    "Inteligencia artificial: oportunidades e riscos para a sociedade"
+  ];
+  var cur=STATE.modeloTema||"";
+  var result=STATE.modeloResult||"";
+  var loading=STATE.modeloLoading||false;
+
+  var h='<div style="font-size:12px;color:#475569;margin-bottom:14px;line-height:1.6">'
+    +'Digite qualquer tema ou escolha um dos temas reais da APMBB. A IA vai gerar uma redacao completa no padrao FGV/BB com analise detalhada.'
+    +'</div>'
+    +'<div style="font-size:11px;color:#475569;font-weight:700;letter-spacing:.1em;text-transform:uppercase;margin-bottom:8px">Temas reais APMBB</div>'
+    +'<div style="display:flex;flex-direction:column;gap:5px;margin-bottom:14px">';
+  for(var i=0;i<temas.length;i++){
+    h+='<button onclick="usarTemaModelo('+i+')" style="text-align:left;padding:10px 12px;border-radius:8px;border:1px solid #1E293B;background:#0B1220;color:#64748B;font-size:12px;cursor:pointer;line-height:1.4">'+temas[i]+'</button>';
+  }
+  h+='</div>'
+    +'<div style="font-size:11px;color:#475569;font-weight:700;letter-spacing:.1em;text-transform:uppercase;margin-bottom:6px">Ou digite seu proprio tema</div>'
+    +'<textarea id="modeloTema" placeholder="Digite o tema aqui..." style="width:100%;padding:10px 12px;border-radius:8px;border:1px solid #334155;background:#070D1A;color:#F1F5F9;font-size:13px;outline:none;margin-bottom:10px;box-sizing:border-box;height:80px;resize:none;font-family:inherit">'+cur+'</textarea>'
+    +'<button onclick="gerarModelo()" style="width:100%;padding:12px;border-radius:9px;border:none;background:linear-gradient(135deg,#F472B6,#A78BFA);color:#000;font-size:13px;font-weight:800;margin-bottom:16px;cursor:pointer">'+(loading?"Gerando redacao...":"Gerar Redacao Modelo com IA")+'</button>';
+
+  if(loading){
+    h+='<div style="display:flex;align-items:center;gap:12px;background:#0B1220;border:1px solid #F472B622;border-radius:10px;padding:16px">'
+      +'<div style="width:20px;height:20px;border-radius:50%;border:3px solid #F472B644;border-top-color:#F472B6;animation:spin .8s linear infinite;flex-shrink:0"></div>'
+      +'<div style="font-size:13px;color:#F472B6">A IA esta escrevendo a redacao no padrao FGV/BB...</div>'
+      +'</div>'
+      +'<style>@keyframes spin{to{transform:rotate(360deg)}}</style>';
+  } else if(result){
+    h+=result;
+    h+='<button onclick="limparModelo()" style="width:100%;padding:10px;border-radius:8px;border:1px solid #334155;background:transparent;color:#475569;font-size:12px;font-weight:700;margin-top:12px;cursor:pointer">Gerar novo modelo</button>';
+  }
+  return h;
+}
+
+var TEMAS_MODELO=[
+  "Como lidar com o estresse financeiro em uma sociedade consumista?",
+  "Atletas nas redes sociais: prejudicios a saude mental vs. exposicao digital",
+  "Vicio em jogos eletronicos: quem deve proteger criancas e adolescentes?",
+  "Trabalho por aplicativos: modernizacao ou precarizacao das relacoes?",
+  "Saude mental nas forcas de seguranca: um desafio institucional",
+  "Reconhecimento facial pela policia: seguranca ou ameaca a privacidade?",
+  "Violencia domestica: responsabilidade do Estado e da sociedade",
+  "Fake news e responsabilidade das redes sociais na democracia",
+  "Inteligencia artificial: oportunidades e riscos para a sociedade"
+];
+
+function usarTemaModelo(i){
+  STATE.modeloTema=TEMAS_MODELO[i];
+  STATE.modeloResult="";
+  save();renderApp();
+  setTimeout(function(){var t=document.getElementById("modeloTema");if(t){t.value=STATE.modeloTema;t.scrollIntoView({behavior:"smooth"});}},100);
+}
+
+function gerarModelo(){
+  var inp=document.getElementById("modeloTema");
+  var tema=inp?inp.value.trim():STATE.modeloTema||"";
+  if(!tema){alert("Digite o tema!");return;}
+  STATE.modeloTema=tema;
+  STATE.modeloResult="";
+  STATE.modeloLoading=true;
+  save();renderApp();
+
+  var prompt="Voce e um especialista em redacao dissertativa-argumentativa para o concurso APMBB (Academia de Policia Militar Barro Branco), banca FGV. O candidato tem 60 dias para a prova e precisa de um modelo nota maxima (20/20).\n\nEscreva uma redacao completa e real para o tema: "+tema+"\n\nREGRAS OBRIGATORIAS DA FGV/BB:\n- Texto dissertativo-argumentativo em prosa\n- Maximo 30 linhas (aproximadamente 25 linhas)\n- Introducao com repertorio cultural/filosofico/cientifico pertinente\n- Desenvolvimento com 2 aspectos bem delimitados, cada um com dados concretos\n- Conclusao com solucao especifica e agentes responsaveis identificados\n- Conectivos variados: alem disso, contudo, portanto, nesse sentido, entretanto\n- SEM acentos especiais - use apenas letras sem acento (a, e, i, o, u, c, n - sem til, agudo, circunflexo)\n\nDepois da redacao, escreva uma analise com 5 pontos explicando o que garantiu a nota maxima nessa redacao.\n\nRetorne APENAS um JSON assim (sem markdown, sem explicacao):\n{\"redacao\":\"texto completo com paragrafos separados por \\n\\n\",\"analise\":[{\"titulo\":\"...\",\"texto\":\"...\"},...]}"
+
+  fetch("https://api.anthropic.com/v1/messages",{
+    method:"POST",
+    headers:{"Content-Type":"application/json"},
+    body:JSON.stringify({
+      model:"claude-sonnet-4-20250514",
+      max_tokens:2000,
+      messages:[{role:"user",content:prompt}]
+    })
+  })
+  .then(function(r){return r.json();})
+  .then(function(data){
+    var raw=data.content.map(function(b){return b.text||"";}).join("");
+    var clean=raw.replace(/```json|```/g,"").trim();
+    var parsed=JSON.parse(clean);
+    STATE.modeloLoading=false;
+    STATE.modeloResult=buildModeloHTML(parsed,tema);
+    save();renderApp();
+  })
+  .catch(function(e){
+    STATE.modeloLoading=false;
+    STATE.modeloResult='<div style="background:#130707;border:1px solid #EF444433;border-radius:10px;padding:14px;font-size:12px;color:#FCA5A5">Erro ao gerar. Verifique sua conexao e tente novamente.</div>';
+    save();renderApp();
+  });
+}
+
+function buildModeloHTML(parsed,tema){
+  var paragrafos=parsed.redacao.split("\n\n");
+  var txtHtml='';
+  for(var i=0;i<paragrafos.length;i++){
+    txtHtml+='<p style="font-size:13px;color:#94A3B8;line-height:1.8;margin-bottom:14px;text-indent:2em">'+paragrafos[i]+'</p>';
+  }
+  var html='<div style="background:#0B1220;border:1px solid #F472B655;border-radius:12px;overflow:hidden">'
+    +'<div style="background:#F472B615;padding:12px 14px;border-bottom:1px solid #F472B622">'
+    +'<div style="font-size:10px;font-weight:800;color:#F472B6;letter-spacing:.1em;margin-bottom:2px">REDACAO MODELO - NOTA 20/20</div>'
+    +'<div style="font-size:13px;font-weight:700;color:#E2E8F0">'+tema+'</div>'
+    +'</div>'
+    +'<div style="padding:16px">'+txtHtml+'</div>'
+    +'</div>';
+
+  if(parsed.analise&&parsed.analise.length>0){
+    html+='<div style="margin-top:16px">'
+      +'<div style="font-size:11px;font-weight:800;color:#22C55E;letter-spacing:.1em;text-transform:uppercase;margin-bottom:10px">O que garantiu nota maxima</div>';
+    for(var i=0;i<parsed.analise.length;i++){
+      var a=parsed.analise[i];
+      html+='<div style="background:#0A1A0A;border:1px solid #22C55E22;border-radius:9px;padding:11px 13px;margin-bottom:8px">'
+        +'<div style="font-size:12px;font-weight:800;color:#22C55E;margin-bottom:4px">'+a.titulo+'</div>'
+        +'<div style="font-size:12px;color:#475569;line-height:1.6">'+a.texto+'</div>'
+        +'</div>';
+    }
+    html+='</div>';
+  }
+  return html;
+}
+
+function limparModelo(){STATE.modeloResult="";STATE.modeloTema="";save();renderApp();}
+
+// -- CORRIGIR MINHA REDACAO ----------------------------------------------------
+function renderRedacaoCorrigir(){
+  var loading=STATE.corrigirLoading||false;
+  var result=STATE.corrigirResult||"";
+  var h='<div style="font-size:12px;color:#475569;margin-bottom:14px;line-height:1.6">'
+    +'Cole a sua redacao abaixo. A IA vai dar uma nota de 0 a 20, apontar pontos fortes, erros e dicas especificas para melhorar - como um professor particular.'
+    +'</div>'
+    +'<div style="font-size:11px;color:#475569;font-weight:700;letter-spacing:.1em;text-transform:uppercase;margin-bottom:6px">Tema da sua redacao (opcional)</div>'
+    +'<input id="cTema" placeholder="Ex: estresse financeiro na sociedade consumista" style="width:100%;padding:10px 12px;border-radius:8px;border:1px solid #334155;background:#070D1A;color:#F1F5F9;font-size:13px;outline:none;margin-bottom:10px;box-sizing:border-box">'
+    +'<div style="font-size:11px;color:#475569;font-weight:700;letter-spacing:.1em;text-transform:uppercase;margin-bottom:6px">Sua redacao</div>'
+    +'<textarea id="cTexto" placeholder="Cole ou escreva sua redacao aqui..." style="width:100%;padding:10px 12px;border-radius:8px;border:1px solid #334155;background:#070D1A;color:#F1F5F9;font-size:13px;outline:none;margin-bottom:10px;box-sizing:border-box;height:200px;resize:vertical;font-family:inherit"></textarea>'
+    +'<button onclick="corrigirRedacao()" style="width:100%;padding:12px;border-radius:9px;border:none;background:linear-gradient(135deg,#3B82F6,#6366F1);color:#fff;font-size:13px;font-weight:800;margin-bottom:16px;cursor:pointer">'+(loading?"Corrigindo...":"Corrigir com IA")+'</button>';
+
+  if(loading){
+    h+='<div style="display:flex;align-items:center;gap:12px;background:#0B1220;border:1px solid #3B82F622;border-radius:10px;padding:16px">'
+      +'<div style="width:20px;height:20px;border-radius:50%;border:3px solid #3B82F644;border-top-color:#3B82F6;animation:spin .8s linear infinite;flex-shrink:0"></div>'
+      +'<div style="font-size:13px;color:#60A5FA">A IA esta corrigindo sua redacao...</div>'
+      +'</div>'
+      +'<style>@keyframes spin{to{transform:rotate(360deg)}}</style>';
+  } else if(result){
+    h+=result;
+    h+='<button onclick="limparCorrigir()" style="width:100%;padding:10px;border-radius:8px;border:1px solid #334155;background:transparent;color:#475569;font-size:12px;font-weight:700;margin-top:12px;cursor:pointer">Corrigir outra redacao</button>';
+  }
+  return h;
+}
+
+function corrigirRedacao(){
+  var tema=(document.getElementById("cTema")||{}).value||"";
+  var texto=(document.getElementById("cTexto")||{}).value||"";
+  if(!texto||texto.trim().length<50){alert("Digite sua redacao antes de corrigir!");return;}
+  STATE.corrigirLoading=true;
+  STATE.corrigirResult="";
+  save();renderApp();
+
+  var prompt="Voce e um professor especialista em redacao para o concurso APMBB (Barro Branco), banca FGV. Corrija a redacao abaixo como um professor rigoroso mas justo.\n\n"+(tema?"Tema: "+tema+"\n\n":"")+"Redacao do candidato:\n"+texto+"\n\nA prova FGV/BB avalia 3 criterios:\n1. Adequacao ao tema (0-7 pontos)\n2. Estrutura: genero/tipo/coerencia (0-7 pontos)\n3. Expressao: coesao/modalidade/gramatica (0-6 pontos)\nTotal: 0 a 20 pontos. Habilitado com 10+.\n\nRetorne APENAS um JSON (sem markdown):\n{\"nota\":15,\"criterios\":{\"tema\":5,\"estrutura\":5,\"expressao\":5},\"pontosFort es\":[\"...\",\"...\"],\"pontosMelhorar\":[{\"titulo\":\"...\",\"problema\":\"...\",\"correcao\":\"...\"}],\"comentarioGeral\":\"...\",\"dicaPrincipal\":\"...\"}"
+
+  fetch("https://api.anthropic.com/v1/messages",{
+    method:"POST",
+    headers:{"Content-Type":"application/json"},
+    body:JSON.stringify({
+      model:"claude-sonnet-4-20250514",
+      max_tokens:1500,
+      messages:[{role:"user",content:prompt}]
+    })
+  })
+  .then(function(r){return r.json();})
+  .then(function(data){
+    var raw=data.content.map(function(b){return b.text||"";}).join("");
+    var clean=raw.replace(/```json|```/g,"").trim();
+    var parsed=JSON.parse(clean);
+    STATE.corrigirLoading=false;
+    STATE.corrigirResult=buildCorrecaoHTML(parsed);
+    save();renderApp();
+  })
+  .catch(function(e){
+    STATE.corrigirLoading=false;
+    STATE.corrigirResult='<div style="background:#130707;border:1px solid #EF444433;border-radius:10px;padding:14px;font-size:12px;color:#FCA5A5">Erro ao corrigir. Verifique sua conexao e tente novamente.</div>';
+    save();renderApp();
+  });
+}
+
+function buildCorrecaoHTML(p){
+  var nota=p.nota||0;
+  var nc=nota>=15?"#22C55E":nota>=10?"#F59E0B":"#EF4444";
+  var sit=nota>=15?"Excelente! Acima da media de aprovacao":nota>=10?"Habilitado! Acima do minimo (10)":"Nao habilitado. Precisa melhorar muito";
+
+  var html='<div style="background:#0B1220;border:1px solid '+nc+'55;border-radius:14px;overflow:hidden">'
+    +'<div style="background:'+nc+'15;padding:16px;display:flex;align-items:center;justify-content:space-between">'
+    +'<div>'
+    +'<div style="font-size:11px;font-weight:700;color:'+nc+';letter-spacing:.1em;margin-bottom:2px">SUA NOTA</div>'
+    +'<div style="font-size:13px;color:#94A3B8">'+sit+'</div>'
+    +'</div>'
+    +'<div style="font-size:52px;font-weight:900;color:'+nc+';line-height:1">'+nota+'</div>'
+    +'</div>'
+    +'<div style="padding:14px">'
+    // Criterios
+    +'<div style="font-size:11px;font-weight:800;color:#475569;letter-spacing:.1em;text-transform:uppercase;margin-bottom:10px">Criterios FGV</div>'
+    +'<div style="display:flex;gap:8px;margin-bottom:16px">';
+
+  var crit=[
+    {k:"tema",lb:"Tema",max:7,c:"#3B82F6"},
+    {k:"estrutura",lb:"Estrutura",max:7,c:"#F59E0B"},
+    {k:"expressao",lb:"Expressao",max:6,c:"#A78BFA"}
+  ];
+  for(var i=0;i<crit.length;i++){
+    var cr=crit[i];var val=(p.criterios&&p.criterios[cr.k])||0;
+    var pct=Math.round(val/cr.max*100);
+    html+='<div style="flex:1;background:#070D1A;border:1px solid #1E293B;border-radius:8px;padding:10px;text-align:center">'
+      +'<div style="font-size:18px;font-weight:900;color:'+cr.c+'">'+val+'/'+cr.max+'</div>'
+      +'<div style="font-size:10px;color:#475569;margin:2px 0">'+cr.lb+'</div>'
+      +'<div style="background:#1E293B;border-radius:999px;height:4px;overflow:hidden;margin-top:4px">'
+      +'<div style="height:100%;width:'+pct+'%;background:'+cr.c+';border-radius:999px"></div>'
+      +'</div></div>';
+  }
+  html+='</div>';
+
+  // Pontos fortes
+  if(p.pontosFortes&&p.pontosFortes.length>0){
+    html+='<div style="font-size:11px;font-weight:800;color:#22C55E;letter-spacing:.1em;text-transform:uppercase;margin-bottom:8px">Pontos fortes</div>';
+    for(var i=0;i<p.pontosFortes.length;i++){
+      html+='<div style="display:flex;gap:8px;align-items:flex-start;margin-bottom:7px">'
+        +'<span style="color:#22C55E;font-size:14px;flex-shrink:0;margin-top:1px">&#10003;</span>'
+        +'<span style="font-size:12px;color:#64748B;line-height:1.5">'+p.pontosFortes[i]+'</span>'
+        +'</div>';
+    }
+  }
+
+  // Pontos a melhorar
+  if(p.pontosMelhorar&&p.pontosMelhorar.length>0){
+    html+='<div style="font-size:11px;font-weight:800;color:#EF4444;letter-spacing:.1em;text-transform:uppercase;margin:14px 0 8px">O que melhorar</div>';
+    for(var i=0;i<p.pontosMelhorar.length;i++){
+      var m=p.pontosMelhorar[i];
+      html+='<div style="background:#130707;border:1px solid #EF444422;border-radius:9px;padding:11px 13px;margin-bottom:8px">'
+        +'<div style="font-size:12px;font-weight:800;color:#FCA5A5;margin-bottom:4px">'+m.titulo+'</div>'
+        +'<div style="font-size:12px;color:#7F1D1D;margin-bottom:6px">'+m.problema+'</div>'
+        +'<div style="font-size:12px;color:#475569;background:#0A0404;padding:8px;border-radius:6px"><strong style="color:#60A5FA">Como corrigir:</strong> '+m.correcao+'</div>'
+        +'</div>';
+    }
+  }
+
+  // Dica principal
+  if(p.dicaPrincipal){
+    html+='<div style="background:#080F1F;border:1px solid #1E40AF33;border-radius:9px;padding:12px;margin-top:8px">'
+      +'<div style="font-size:11px;font-weight:800;color:#60A5FA;margin-bottom:4px">Dica principal para a proxima redacao</div>'
+      +'<div style="font-size:12px;color:#334155;line-height:1.6">'+p.dicaPrincipal+'</div>'
+      +'</div>';
+  }
+
+  html+='</div></div>';
+  return html;
+}
+
+function limparCorrigir(){STATE.corrigirResult="";save();renderApp();}
+
+// -- MEUS TREINOS --------------------------------------------------------------
+function renderRedacaoTreinos(){
   var total=Object.keys(REDLOG).length;
   var notas=[];for(var k in REDLOG){if(REDLOG[k].nota!==undefined)notas.push(REDLOG[k].nota);}
   var media=notas.length>0?(notas.reduce(function(a,b){return a+b;},0)/notas.length).toFixed(1):"-";
-  var sit=media==="-"?"Iniciar":parseFloat(media)>=15?"Otimo":parseFloat(media)>=10?"Bom":"Treinar mais";
   var sitC=media==="-"?"#475569":parseFloat(media)>=15?"#22C55E":parseFloat(media)>=10?"#F59E0B":"#EF4444";
-  var html='<div style="font-size:15px;font-weight:800;color:#F1F5F9;margin-bottom:4px">Treino de Redacao</div>'
-    +'<div style="font-size:12px;color:#475569;margin-bottom:16px">Temas reais APMBB + tendencias. Meta: 1 por semana.</div>'
-    +'<div style="display:flex;gap:10px;margin-bottom:20px">'
+  var sit=media==="-"?"Iniciar":parseFloat(media)>=15?"Otimo":parseFloat(media)>=10?"Bom":"Treinar mais";
+
+  var h='<div style="display:flex;gap:10px;margin-bottom:16px">'
     +'<div style="flex:1;background:#0B1220;border:1px solid #1E293B;border-radius:10px;padding:12px;text-align:center"><div style="font-size:22px;font-weight:900;color:#F472B6">'+total+'</div><div style="font-size:11px;color:#475569">feitas</div></div>'
     +'<div style="flex:1;background:#0B1220;border:1px solid #1E293B;border-radius:10px;padding:12px;text-align:center"><div style="font-size:22px;font-weight:900;color:#F472B6">'+media+'</div><div style="font-size:11px;color:#475569">media pts</div></div>'
     +'<div style="flex:1;background:#0B1220;border:1px solid #1E293B;border-radius:10px;padding:12px;text-align:center"><div style="font-size:16px;font-weight:900;color:'+sitC+'">'+sit+'</div><div style="font-size:11px;color:#475569">situacao</div></div>'
     +'</div>'
-    +'<div style="font-size:11px;font-weight:800;color:#F472B6;letter-spacing:.1em;text-transform:uppercase;margin-bottom:8px">Temas Reais APMBB</div>';
-  for(var i=0;i<TEMAS.length;i++){if(TEMAS[i].real)html+=renderTemaCard(i);}
-  html+='<div style="font-size:11px;font-weight:800;color:#A78BFA;letter-spacing:.1em;text-transform:uppercase;margin:16px 0 8px">Temas Tendencia</div>';
-  for(var i=0;i<TEMAS.length;i++){if(!TEMAS[i].real)html+=renderTemaCard(i);}
-  html+='<div style="background:#0B1220;border:1px solid #1E293B;border-radius:12px;padding:16px;margin-top:16px">'
+    +'<div style="background:#0B1220;border:1px solid #1E293B;border-radius:12px;padding:16px">'
     +'<div style="font-size:13px;font-weight:800;color:#F1F5F9;margin-bottom:12px">Registrar Redacao Feita</div>'
     +'<div style="font-size:11px;color:#475569;margin-bottom:6px">Tema que voce treinou</div>'
     +'<input id="rtema" placeholder="Descreva o tema..." style="width:100%;padding:10px 12px;border-radius:8px;border:1px solid #334155;background:#070D1A;color:#F1F5F9;font-size:13px;outline:none;margin-bottom:10px;box-sizing:border-box">'
@@ -507,27 +896,25 @@ function renderRedacao(){
     +'<input id="rnota" type="range" min="0" max="20" value="10" oninput="el(\'rval\').textContent=this.value" style="flex:1;accent-color:#F472B6">'
     +'<span id="rval" style="font-size:18px;font-weight:900;color:#F472B6;min-width:28px;text-align:center">10</span>'
     +'</div>'
-    +'<button onclick="registrarRed()" style="width:100%;padding:12px;border-radius:9px;border:none;background:#F472B6;color:#000;font-size:13px;font-weight:800">Registrar</button>'
+    +'<button onclick="registrarRed()" style="width:100%;padding:12px;border-radius:9px;border:none;background:#F472B6;color:#000;font-size:13px;font-weight:800;cursor:pointer">Registrar</button>'
     +'</div>';
-  return html;
+
+  var keys=Object.keys(REDLOG).sort().reverse();
+  if(keys.length>0){
+    h+='<div style="margin-top:16px;font-size:11px;font-weight:800;color:#475569;letter-spacing:.1em;text-transform:uppercase;margin-bottom:8px">Historico</div>';
+    for(var i=0;i<keys.length;i++){
+      var r=REDLOG[keys[i]];
+      var nc2=r.nota>=15?"#22C55E":r.nota>=10?"#F59E0B":"#EF4444";
+      h+='<div style="background:#0B1220;border:1px solid #1E293B;border-radius:9px;padding:10px 12px;margin-bottom:6px;display:flex;justify-content:space-between;align-items:center">'
+        +'<div><div style="font-size:11px;color:#64748B">'+fmtShort(keys[i])+'</div>'
+        +'<div style="font-size:12px;color:#94A3B8;margin-top:2px">'+(r.tema?r.tema.substring(0,50)+"...":"sem tema")+'</div></div>'
+        +'<span style="font-size:20px;font-weight:900;color:'+nc2+'">'+r.nota+'</span>'
+        +'</div>';
+    }
+  }
+  return h;
 }
 
-function renderTemaCard(i){
-  var t=TEMAS[i];var cor=t.real?"#F472B6":"#A78BFA";
-  return'<div style="background:#0B1220;border:1px solid '+cor+'22;border-radius:10px;padding:12px;margin-bottom:8px">'
-    +'<div style="display:flex;justify-content:space-between;align-items:flex-start;gap:8px">'
-    +'<div style="flex:1"><div style="font-size:12px;font-weight:700;color:#E2E8F0;line-height:1.4;margin-bottom:4px">'+t.t+'</div>'
-    +'<div style="font-size:10px;color:'+cor+'88;font-weight:600">'+t.a+'</div></div>'
-    +'<button onclick="usarTema('+i+')" style="padding:4px 10px;border-radius:6px;border:1px solid '+cor+'44;background:'+cor+'15;color:'+cor+';font-size:11px;font-weight:700;cursor:pointer;flex-shrink:0">Usar</button>'
-    +'</div></div>';
-}
-function usarTema(i){var inp=el("rtema");if(inp){inp.value=TEMAS[i].t;inp.scrollIntoView({behavior:"smooth"});}}
-function registrarRed(){
-  var tema=(el("rtema")||{}).value||"";
-  var nota=parseInt((el("rnota")||{}).value||"10");
-  if(!tema.trim()){alert("Digite o tema!");return;}
-  REDLOG[todayStr()]={tema:tema,nota:nota};saveR();renderApp();
-}
 
 function renderTaf(){
   var today=todayStr();var tlog=TAFLOG[today]||{};
@@ -594,9 +981,12 @@ function salvarTaf(){
   TAFLOG[today]=log;saveT();renderApp();
 }
 
+function toggleAula(c){if(STATE.aula[c]){delete STATE.aula[c];}else{STATE.aula[c]=true;delete STATE.skipped[c];}if(STATE.aula[c]&&STATE.exercicio[c])STATE.done[c]=true;else delete STATE.done[c];save();renderApp();}
+function toggleEx(c){if(STATE.exercicio[c]){delete STATE.exercicio[c];}else{STATE.exercicio[c]=true;delete STATE.skipped[c];}if(STATE.aula[c]&&STATE.exercicio[c])STATE.done[c]=true;else delete STATE.done[c];save();renderApp();}
+
 function toggleDay(n){STATE.expanded[n]=!STATE.expanded[n];save();renderApp();}
 function markDone(c){STATE.done[c]=true;delete STATE.skipped[c];save();renderApp();}
-function markSkip(c){if(STATE.skipped[c]){delete STATE.skipped[c];}else{STATE.skipped[c]=true;delete STATE.done[c];}save();renderApp();}
+function markSkip(c){if(STATE.skipped[c]){delete STATE.skipped[c];}else{STATE.skipped[c]=true;delete STATE.done[c];delete STATE.aula[c];delete STATE.exercicio[c];}save();renderApp();}
 
 function pedirPermissaoNotificacao(){
   if(!("Notification" in window))return;

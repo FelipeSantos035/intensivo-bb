@@ -22,6 +22,7 @@ button{font-family:inherit;cursor:pointer;border:none}
 .tab.active{background:#0B1220;border-color:#334155;color:#94A3B8}
 .tab.active.danger{border-color:#EF4444;color:#EF4444}
 </style>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js"></script>
 </head>
 <body>
 <div id="setup"></div>
@@ -350,7 +351,7 @@ function renderHeader(sched){
     {id:"pending", lb:"Pendencias"+(skipCount>0?" ("+skipCount+")":""),danger:(skipCount>0)},
     {id:"progress",lb:"Progresso"},
     {id:"redacao", lb:"Redacao"},
-    {id:"taf",     lb:"TAF Fisico"},
+    {id:"taf",lb:"TAF Fisico"},{id:"config",lb:"Config"},
     {id:"notif",   lb:"Lembretes"}
   ];
   var th="";
@@ -367,7 +368,7 @@ function renderHeader(sched){
     +'<div style="font-size:10px;font-weight:800;color:#F59E0B;letter-spacing:.2em">FOCO BARRO BRANCO</div>'
     +'<div style="font-size:19px;font-weight:900;color:#F1F5F9;line-height:1.1;margin-top:2px">Intensivo BB 2026</div>'
     +'<div style="display:flex;gap:6px;margin-top:5px;flex-wrap:wrap;align-items:center;font-size:10px;color:#475569">'
-    +'<span>Inicio</span><span style="font-size:11px;font-weight:700;color:#60A5FA;background:#1E3A5F22;border:1px solid #60A5FA33;border-radius:5px;padding:1px 7px">'+fmtShort(STATE.startDate)+'</span>'
+    +'<span>Inicio</span><button onclick="alterarData()" style="font-size:11px;font-weight:700;color:#60A5FA;background:#1E3A5F22;border:1px solid #60A5FA55;border-radius:5px;padding:1px 9px;cursor:pointer">'+fmtShort(STATE.startDate)+' (editar)</button>'
     +'<span style="color:#334155">-&gt;</span>'
     +'<span style="font-size:11px;font-weight:700;color:#22C55E;background:#22C55E18;border:1px solid #22C55E33;border-radius:5px;padding:1px 7px">'+fmtShort(sched.endDate)+'</span>'
     +'<span style="color:#F59E0B;font-weight:700">'+sched.daysLeft+'d</span>'
@@ -392,6 +393,9 @@ function renderContent(sched){
   else if(STATE.view==="redacao")c.innerHTML=renderRedacao();
   else if(STATE.view==="taf")c.innerHTML=renderTaf();
   else if(STATE.view==="notif")c.innerHTML=renderNotificacoes();
+  else if(STATE.view==="config")c.innerHTML=renderConfig();
+  else if(STATE.view==="altdata")c.innerHTML=renderAltData();
+
 }
 
 function renderSchedule(sched){
@@ -628,9 +632,34 @@ function renderRedacaoModelo(){
   var result=STATE.modeloResult||"";
   var loading=STATE.modeloLoading||false;
 
+  var textoBase=STATE.textoBase||"";
+  var textoBaseNome=STATE.textoBaseNome||"";
   var h='<div style="font-size:12px;color:#475569;margin-bottom:14px;line-height:1.6">'
-    +'Digite qualquer tema ou escolha um dos temas reais da APMBB. A IA vai gerar uma redacao completa no padrao FGV/BB com analise detalhada.'
+    +(textoBase
+      ? 'PDF carregado! A IA vai identificar o tema do texto base e gerar a redacao automaticamente. Ou escolha um tema diferente abaixo.'
+      : 'Envie o PDF do cursinho - a IA identifica o tema e gera a redacao. Ou escolha um tema da lista.')
     +'</div>'
+    // PDF texto base
+    +'<div style="background:#0B1220;border:1px solid '+(textoBase?'#F59E0B44':'#1E293B')+';border-radius:12px;padding:14px;margin-bottom:14px">'
+    +'<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px">'
+    +'<div>'
+    +'<div style="font-size:12px;font-weight:800;color:'+(textoBase?'#F59E0B':'#94A3B8')+'">Texto base do cursinho</div>'
+    +'<div style="font-size:11px;color:#475569;margin-top:2px">'+(textoBase?'Carregado: <strong style="color:#F59E0B">'+textoBaseNome+'</strong>':'Opcional: envie o PDF da semana para a IA usar como referencia')+'</div>'
+    +'</div>'
+    +(textoBase?'<button onclick="limparTextoBase()" style="font-size:11px;color:#EF4444;background:transparent;border:1px solid #EF444433;border-radius:6px;padding:3px 8px;cursor:pointer">Remover</button>':'')
+    +'</div>'
+    +(textoBase
+      ? '<div style="font-size:11px;color:#475569;background:#070D1A;border-radius:8px;padding:8px 10px;line-height:1.6;max-height:80px;overflow:hidden">'+textoBase.substring(0,300)+'...</div>'
+      : '<label style="display:flex;align-items:center;justify-content:center;gap:8px;padding:10px;border-radius:8px;border:2px dashed #334155;cursor:pointer;font-size:12px;color:#475569;background:#070D1A">'
+        +'<span style="font-size:18px">+</span> Enviar PDF do texto base'
+        +'<input type="file" accept="application/pdf" onchange="carregarPDF(event)" style="display:none">'
+        +'</label>'
+    )
+    +'</div>'
+    // If PDF loaded, show direct generate button
+    +(textoBase&&textoBase!="Lendo PDF..."&&textoBase!="Carregando..."
+      ?'<button onclick="syncTemaAndGerar()" style="width:100%;padding:14px;border-radius:10px;border:none;background:linear-gradient(135deg,#F59E0B,#F472B6);color:#000;font-size:14px;font-weight:900;margin-bottom:16px;cursor:pointer">Gerar Redacao com o PDF do Cursinho</button>'
+      :'')
     +'<div style="font-size:11px;color:#475569;font-weight:700;letter-spacing:.1em;text-transform:uppercase;margin-bottom:8px">Temas reais APMBB</div>'
     +'<div style="display:flex;flex-direction:column;gap:5px;margin-bottom:14px">';
   for(var i=0;i<temas.length;i++){
@@ -638,8 +667,9 @@ function renderRedacaoModelo(){
   }
   h+='</div>'
     +'<div style="font-size:11px;color:#475569;font-weight:700;letter-spacing:.1em;text-transform:uppercase;margin-bottom:6px">Ou digite seu proprio tema</div>'
-    +'<textarea id="modeloTema" placeholder="Digite o tema aqui..." style="width:100%;padding:10px 12px;border-radius:8px;border:1px solid #334155;background:#070D1A;color:#F1F5F9;font-size:13px;outline:none;margin-bottom:10px;box-sizing:border-box;height:80px;resize:none;font-family:inherit">'+cur+'</textarea>'
-    +'<button onclick="gerarModelo()" style="width:100%;padding:12px;border-radius:9px;border:none;background:linear-gradient(135deg,#F472B6,#A78BFA);color:#000;font-size:13px;font-weight:800;margin-bottom:16px;cursor:pointer">'+(loading?"Gerando redacao...":"Gerar Redacao Modelo com IA")+'</button>';
+    +'<textarea id="modeloTema" placeholder="Ex: O papel da policia na reducao da violencia urbana..." style="width:100%;padding:10px 12px;border-radius:8px;border:1px solid '+(cur?"#F472B6":"#334155")+';background:#070D1A;color:#F1F5F9;font-size:13px;outline:none;margin-bottom:10px;box-sizing:border-box;height:80px;resize:none;font-family:inherit">'+cur+'</textarea>'
+    +(cur?'<div style="font-size:11px;color:#F472B6;margin-bottom:10px">Tema selecionado. Clique em Gerar!</div>':'')
+    +'<button onclick="syncTemaAndGerar()" style="width:100%;padding:12px;border-radius:9px;border:none;background:linear-gradient(135deg,#F472B6,#A78BFA);color:#000;font-size:13px;font-weight:800;margin-bottom:16px;cursor:pointer">'+(loading?"Gerando redacao...":"Gerar Redacao Modelo com IA")+'</button>';
 
   if(loading){
     h+='<div style="display:flex;align-items:center;gap:12px;background:#0B1220;border:1px solid #F472B622;border-radius:10px;padding:16px">'
@@ -670,41 +700,111 @@ function usarTemaModelo(i){
   STATE.modeloTema=TEMAS_MODELO[i];
   STATE.modeloResult="";
   save();renderApp();
-  setTimeout(function(){var t=document.getElementById("modeloTema");if(t){t.value=STATE.modeloTema;t.scrollIntoView({behavior:"smooth"});}},100);
+  setTimeout(function(){
+    var t=document.getElementById("modeloTema");
+    if(t){
+      t.value=STATE.modeloTema;
+      t.style.border="1px solid #F472B6";
+      t.scrollIntoView({behavior:"smooth",block:"center"});
+    }
+  },100);
+}
+
+function chamarGemini(prompt, onSuccess, onError){
+  var gkey=STATE.geminiKey||"";
+  if(!gkey){onError("Chave Gemini nao configurada. Va na aba Config.");return;}
+  
+  var url="https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key="+gkey;
+  var body=JSON.stringify({
+    contents:[{parts:[{text:prompt}]}],
+    generationConfig:{temperature:0.7,maxOutputTokens:2000}
+  });
+
+  // Try fetch first, fallback to XHR
+  if(window.fetch){
+    fetch(url,{
+      method:"POST",
+      headers:{"Content-Type":"application/json"},
+      body:body
+    })
+    .then(function(r){
+      if(!r.ok){return r.text().then(function(t){throw new Error("HTTP "+r.status+": "+t.substring(0,200));});}
+      return r.json();
+    })
+    .then(function(data){
+      if(data.error){throw new Error(data.error.message||JSON.stringify(data.error));}
+      if(!data.candidates||!data.candidates[0]){throw new Error("API retornou resposta vazia.");}
+      onSuccess(data.candidates[0].content.parts[0].text||"");
+    })
+    .catch(function(e){
+      // Fallback to XHR on fetch failure
+      chamarGeminiXHR(url,body,onSuccess,onError,String(e));
+    });
+  } else {
+    chamarGeminiXHR(url,body,onSuccess,onError,"");
+  }
+}
+
+function chamarGeminiXHR(url,body,onSuccess,onError,fetchErr){
+  var xhr=new XMLHttpRequest();
+  xhr.open("POST",url,true);
+  xhr.setRequestHeader("Content-Type","application/json");
+  xhr.onload=function(){
+    try{
+      var data=JSON.parse(xhr.responseText);
+      if(data.error){onError(data.error.message||JSON.stringify(data.error));return;}
+      if(!data.candidates||!data.candidates[0]){onError("Resposta vazia da API.");return;}
+      onSuccess(data.candidates[0].content.parts[0].text||"");
+    }catch(e){onError("Erro ao processar resposta: "+e.message);}
+  };
+  xhr.onerror=function(){
+    onError("Falha de rede."+(fetchErr?" (fetch: "+fetchErr+")":"")+" Verifique sua conexao e a chave na aba Config.");
+  };
+  xhr.send(body);
+}
+
+
+function syncTemaAndGerar(){
+  // Read current textarea value before generating
+  var inp=document.getElementById("modeloTema");
+  if(inp&&inp.value.trim()){
+    STATE.modeloTema=inp.value.trim();
+  }
+  gerarModelo();
 }
 
 function gerarModelo(){
   var inp=document.getElementById("modeloTema");
-  var tema=inp?inp.value.trim():STATE.modeloTema||"";
-  if(!tema){alert("Digite o tema!");return;}
+  var temaManuais=inp?inp.value.trim():STATE.modeloTema||"";
+  var temaPDF=STATE.textoBase?"extraido do texto base abaixo":"";
+  var tema=temaManuais||(STATE.textoBase?"Tema extraido do texto base do cursinho":"");
+  if(!tema){alert("Envie o PDF do cursinho OU selecione/digite um tema!");return;}
   STATE.modeloTema=tema;
   STATE.modeloResult="";
   STATE.modeloLoading=true;
   save();renderApp();
 
-  var prompt="Voce e um especialista em redacao dissertativa-argumentativa para o concurso APMBB (Academia de Policia Militar Barro Branco), banca FGV. O candidato tem 60 dias para a prova e precisa de um modelo nota maxima (20/20).\n\nEscreva uma redacao completa e real para o tema: "+tema+"\n\nREGRAS OBRIGATORIAS DA FGV/BB:\n- Texto dissertativo-argumentativo em prosa\n- Maximo 30 linhas (aproximadamente 25 linhas)\n- Introducao com repertorio cultural/filosofico/cientifico pertinente\n- Desenvolvimento com 2 aspectos bem delimitados, cada um com dados concretos\n- Conclusao com solucao especifica e agentes responsaveis identificados\n- Conectivos variados: alem disso, contudo, portanto, nesse sentido, entretanto\n- SEM acentos especiais - use apenas letras sem acento (a, e, i, o, u, c, n - sem til, agudo, circunflexo)\n\nDepois da redacao, escreva uma analise com 5 pontos explicando o que garantiu a nota maxima nessa redacao.\n\nRetorne APENAS um JSON assim (sem markdown, sem explicacao):\n{\"redacao\":\"texto completo com paragrafos separados por \\n\\n\",\"analise\":[{\"titulo\":\"...\",\"texto\":\"...\"},...]}"
+  var textoBasePrompt=STATE.textoBase?"\n\nTEXTO BASE DO CURSINHO:\n"+STATE.textoBase.substring(0,2000)+"\n\nIMPORTANTE: Identifique o tema central desse texto base e escreva a redacao sobre esse tema, dialogando com os argumentos e dados presentes no texto.":"";
+  var prompt="Voce e um especialista em redacao dissertativa-argumentativa para o concurso APMBB (Academia de Policia Militar Barro Branco), banca FGV. O candidato tem 60 dias para a prova e precisa de um modelo nota maxima (20/20).\n\nEscreva uma redacao completa e real para o tema: "+tema+textoBasePrompt+"\n\nREGRAS OBRIGATORIAS DA FGV/BB:\n- Texto dissertativo-argumentativo em prosa\n- Maximo 30 linhas (aproximadamente 25 linhas)\n- Introducao com repertorio cultural/filosofico/cientifico pertinente\n- Desenvolvimento com 2 aspectos bem delimitados, cada um com dados concretos\n- Conclusao com solucao especifica e agentes responsaveis identificados\n- Conectivos variados: alem disso, contudo, portanto, nesse sentido, entretanto\n- SEM acentos especiais - use apenas letras sem acento (a, e, i, o, u, c, n - sem til, agudo, circunflexo)\n\nDepois da redacao, escreva uma analise com 5 pontos explicando o que garantiu a nota maxima nessa redacao.\n\nRetorne APENAS um JSON assim (sem markdown, sem explicacao):\n{\"redacao\":\"texto completo com paragrafos separados por \\n\\n\",\"analise\":[{\"titulo\":\"...\",\"texto\":\"...\"},...]}"
 
-  fetch("https://api.anthropic.com/v1/messages",{
-    method:"POST",
-    headers:{"Content-Type":"application/json"},
-    body:JSON.stringify({
-      model:"claude-sonnet-4-20250514",
-      max_tokens:2000,
-      messages:[{role:"user",content:prompt}]
-    })
-  })
-  .then(function(r){return r.json();})
-  .then(function(data){
-    var raw=data.content.map(function(b){return b.text||"";}).join("");
+  var gkey=STATE.geminiKey||"";
+  if(!gkey){
+    STATE.modeloLoading=false;
+    STATE.modeloResult=buildGeminiKeyPrompt();
+    save();renderApp();
+    return;
+  }
+  chamarGemini(prompt, function(raw){
     var clean=raw.replace(/```json|```/g,"").trim();
-    var parsed=JSON.parse(clean);
+    var parsed;
+    try{parsed=JSON.parse(clean);}
+    catch(e2){parsed={redacao:raw,analise:[{titulo:"Redacao gerada pela IA",texto:"Analise indisponivel neste formato."}]};}
     STATE.modeloLoading=false;
     STATE.modeloResult=buildModeloHTML(parsed,tema);
     save();renderApp();
-  })
-  .catch(function(e){
+  }, function(erro){
     STATE.modeloLoading=false;
-    STATE.modeloResult='<div style="background:#130707;border:1px solid #EF444433;border-radius:10px;padding:14px;font-size:12px;color:#FCA5A5">Erro ao gerar. Verifique sua conexao e tente novamente.</div>';
+    STATE.modeloResult='<div style="background:#130707;border:1px solid #EF444433;border-radius:10px;padding:14px;font-size:13px;color:#FCA5A5;line-height:1.6"><strong>Erro:</strong> '+erro+'</div>';
     save();renderApp();
   });
 }
@@ -776,27 +876,24 @@ function corrigirRedacao(){
 
   var prompt="Voce e um professor especialista em redacao para o concurso APMBB (Barro Branco), banca FGV. Corrija a redacao abaixo como um professor rigoroso mas justo.\n\n"+(tema?"Tema: "+tema+"\n\n":"")+"Redacao do candidato:\n"+texto+"\n\nA prova FGV/BB avalia 3 criterios:\n1. Adequacao ao tema (0-7 pontos)\n2. Estrutura: genero/tipo/coerencia (0-7 pontos)\n3. Expressao: coesao/modalidade/gramatica (0-6 pontos)\nTotal: 0 a 20 pontos. Habilitado com 10+.\n\nRetorne APENAS um JSON (sem markdown):\n{\"nota\":15,\"criterios\":{\"tema\":5,\"estrutura\":5,\"expressao\":5},\"pontosFort es\":[\"...\",\"...\"],\"pontosMelhorar\":[{\"titulo\":\"...\",\"problema\":\"...\",\"correcao\":\"...\"}],\"comentarioGeral\":\"...\",\"dicaPrincipal\":\"...\"}"
 
-  fetch("https://api.anthropic.com/v1/messages",{
-    method:"POST",
-    headers:{"Content-Type":"application/json"},
-    body:JSON.stringify({
-      model:"claude-sonnet-4-20250514",
-      max_tokens:1500,
-      messages:[{role:"user",content:prompt}]
-    })
-  })
-  .then(function(r){return r.json();})
-  .then(function(data){
-    var raw=data.content.map(function(b){return b.text||"";}).join("");
+  var gkey=STATE.geminiKey||"";
+  if(!gkey){
+    STATE.corrigirLoading=false;
+    STATE.corrigirResult=buildGeminiKeyPrompt();
+    save();renderApp();
+    return;
+  }
+  chamarGemini(prompt, function(raw){
     var clean=raw.replace(/```json|```/g,"").trim();
-    var parsed=JSON.parse(clean);
+    var parsed;
+    try{parsed=JSON.parse(clean);}
+    catch(e2){parsed={nota:0,criterios:{tema:0,estrutura:0,expressao:0},pontosFortes:[],pontosMelhorar:[{titulo:"Erro de formato",problema:"A IA nao retornou JSON valido.",correcao:"Tente novamente."}],dicaPrincipal:raw.substring(0,300)};}
     STATE.corrigirLoading=false;
     STATE.corrigirResult=buildCorrecaoHTML(parsed);
     save();renderApp();
-  })
-  .catch(function(e){
+  }, function(erro){
     STATE.corrigirLoading=false;
-    STATE.corrigirResult='<div style="background:#130707;border:1px solid #EF444433;border-radius:10px;padding:14px;font-size:12px;color:#FCA5A5">Erro ao corrigir. Verifique sua conexao e tente novamente.</div>';
+    STATE.corrigirResult='<div style="background:#130707;border:1px solid #EF444433;border-radius:10px;padding:14px;font-size:13px;color:#FCA5A5;line-height:1.6"><strong>Erro:</strong> '+erro+'</div>';
     save();renderApp();
   });
 }
@@ -983,6 +1080,158 @@ function salvarTaf(){
 
 function toggleAula(c){if(STATE.aula[c]){delete STATE.aula[c];}else{STATE.aula[c]=true;delete STATE.skipped[c];}if(STATE.aula[c]&&STATE.exercicio[c])STATE.done[c]=true;else delete STATE.done[c];save();renderApp();}
 function toggleEx(c){if(STATE.exercicio[c]){delete STATE.exercicio[c];}else{STATE.exercicio[c]=true;delete STATE.skipped[c];}if(STATE.aula[c]&&STATE.exercicio[c])STATE.done[c]=true;else delete STATE.done[c];save();renderApp();}
+
+function buildApiKeyPrompt(){return buildGeminiKeyPrompt();}
+function buildGeminiKeyPrompt(){
+  return '<div style="background:#0A1A00;border:1px solid #34D39944;border-radius:12px;padding:16px">'
+    +'<div style="font-size:14px;font-weight:800;color:#34D399;margin-bottom:6px">Chave Gemini necessaria</div>'
+    +'<div style="font-size:12px;color:#064E3B;line-height:1.6;margin-bottom:14px">Para usar a IA de redacao, voce precisa de uma chave do Google Gemini. Totalmente GRATUITO, sem cartao de credito.</div>'
+    +'<div style="font-size:11px;font-weight:800;color:#34D399;margin-bottom:8px">Como obter (2 minutos):</div>'
+    +'<div style="font-size:12px;color:#064E3B;line-height:1.9;margin-bottom:14px">'
+    +'1. Acesse <strong style="color:#34D399">aistudio.google.com</strong><br>'
+    +'2. Faca login com sua conta Google (Gmail)<br>'
+    +'3. Clique em <strong>Get API Key</strong> no menu lateral<br>'
+    +'4. Clique em <strong>Create API Key</strong><br>'
+    +'5. Copie a chave e cole na aba Config abaixo'
+    +'</div>'
+    +'<button onclick="setView(\'config\')" style="width:100%;padding:11px;border-radius:8px;border:none;background:#34D399;color:#000;font-size:13px;font-weight:800;cursor:pointer">Ir para Config e colar a chave</button>'
+    +'</div>';
+}
+
+function renderConfig(){
+  var key=STATE.geminiKey||"";
+  var masked=key?key.substring(0,8)+"..."+key.substring(key.length-4):"";
+  return '<div style="font-size:15px;font-weight:800;color:#F1F5F9;margin-bottom:4px">Configuracoes</div>'
+    +'<div style="font-size:12px;color:#475569;margin-bottom:16px">Configure sua chave do Google Gemini para usar a IA de redacao.</div>'
+    +'<div style="background:#0A1A00;border:1px solid #34D39933;border-radius:12px;padding:16px;margin-bottom:12px">'
+    +'<div style="font-size:13px;font-weight:800;color:#34D399;margin-bottom:4px">Chave Google Gemini (GRATUITO)</div>'
+    +'<div style="font-size:11px;color:#064E3B;margin-bottom:10px;line-height:1.6">Obtenha em: <strong>aistudio.google.com</strong> > Get API Key > Create API Key<br>Gratis, sem cartao, so precisa de conta Gmail.</div>'
+    +(key?'<div style="font-size:12px;color:#22C55E;margin-bottom:8px">Chave ativa: '+masked+'</div>':'')
+    +'<input id="geminiKeyInput" type="password" placeholder="AIzaSy..." value="'+key+'" style="width:100%;padding:10px 12px;border-radius:8px;border:1px solid #334155;background:#070D1A;color:#F1F5F9;font-size:13px;outline:none;margin-bottom:10px;box-sizing:border-box">'
+    +'<button onclick="salvarGeminiKey()" style="width:100%;padding:11px;border-radius:8px;border:none;background:#34D399;color:#000;font-size:13px;font-weight:800;cursor:pointer">Salvar Chave Gemini</button>'
+    +'</div>'
+    +'<div style="background:#080F1F;border:1px solid #1E40AF33;border-radius:10px;padding:12px;font-size:11px;color:#334155;line-height:1.7">'
+    +'<strong style="color:#60A5FA">Seguranca:</strong> A chave fica salva apenas no seu celular. Nao passa por nenhum servidor nosso.'
+    +'<br><br><strong style="color:#60A5FA">Limites gratuitos:</strong> 1.000 requisicoes por dia, 15 por minuto. Mais que suficiente para seus treinos de redacao.'
+    +'</div>';
+}
+
+function salvarGeminiKey(){
+  var inp=document.getElementById("geminiKeyInput");
+  if(!inp||!inp.value.trim()){alert("Digite a chave!");return;}
+  STATE.geminiKey=inp.value.trim();
+  save();
+  alert("Chave salva! Agora voce pode usar a IA de redacao.");
+  renderApp();
+}
+function salvarApiKey(){salvarGeminiKey();}
+
+
+function alterarData(){
+  setView("altdata");
+}
+
+function renderAltData(){
+  var cur=STATE.startDate||todayStr();
+  var end=addDays(cur,59);
+  return '<div style="font-size:15px;font-weight:800;color:#F1F5F9;margin-bottom:4px">Alterar Data de Inicio</div>'
+    +'<div style="font-size:12px;color:#475569;margin-bottom:16px">O cronograma sera recalculado automaticamente a partir da nova data.</div>'
+    +'<div style="background:#0B1220;border:1px solid #1E293B;border-radius:12px;padding:20px">'
+    +'<label style="display:block;font-size:11px;font-weight:700;color:#475569;letter-spacing:.1em;text-transform:uppercase;margin-bottom:8px">Nova data de inicio</label>'
+    +'<input type="date" id="novaData" value="'+cur+'" style="width:100%;padding:12px 14px;border-radius:10px;border:1px solid #334155;background:#070D1A;color:#F1F5F9;font-size:15px;font-weight:600;outline:none;margin-bottom:16px;box-sizing:border-box">'
+    +'<div style="background:#070D1A;border:1px solid #1E293B;border-radius:10px;padding:12px 14px;margin-bottom:16px">'
+    +'<div style="display:flex;justify-content:space-between;margin-bottom:6px;font-size:12px"><span style="color:#475569">Inicio</span><span id="nd-start" style="color:#60A5FA;font-weight:700">'+fmtFull(cur)+'</span></div>'
+    +'<div style="display:flex;justify-content:space-between;margin-bottom:6px;font-size:12px"><span style="color:#475569">Conclusao</span><span id="nd-end" style="color:#22C55E;font-weight:700">'+fmtFull(end)+'</span></div>'
+    +'<div style="display:flex;justify-content:space-between;font-size:12px"><span style="color:#475569">Duracao</span><span style="color:#F59E0B;font-weight:700">60 dias</span></div>'
+    +'</div>'
+    +'<div style="background:#130A00;border:1px solid #F59E0B33;border-radius:9px;padding:10px 12px;margin-bottom:16px;font-size:11px;color:#78350F;line-height:1.6">'
+    +'Seu progresso (aulas assistidas e exercicios feitos) sera mantido. Apenas as datas serao recalculadas.'
+    +'</div>'
+    +'<div style="display:flex;gap:10px">'
+    +'<button onclick="setView(\'schedule\')" style="flex:1;padding:12px;border-radius:9px;border:1px solid #334155;background:transparent;color:#64748B;font-size:13px;font-weight:700;cursor:pointer">Cancelar</button>'
+    +'<button onclick="confirmarNovaData()" style="flex:2;padding:12px;border-radius:9px;border:none;background:linear-gradient(135deg,#F59E0B,#EF4444);color:#000;font-size:13px;font-weight:800;cursor:pointer">Confirmar Nova Data</button>'
+    +'</div>'
+    +'</div>';
+}
+
+function initAltData(){
+  var inp=document.getElementById("novaData");
+  if(!inp)return;
+  inp.addEventListener("change",function(){
+    var v=this.value;
+    if(!v)return;
+    var s=document.getElementById("nd-start");
+    var e=document.getElementById("nd-end");
+    if(s)s.textContent=fmtFull(v);
+    if(e)e.textContent=fmtFull(addDays(v,59));
+  });
+}
+setTimeout(initAltData,0);
+
+function confirmarNovaData(){
+  var inp=document.getElementById("novaData");
+  if(!inp||!inp.value){alert("Selecione uma data!");return;}
+  STATE.startDate=inp.value;
+  save();
+  setView("schedule");
+}
+
+
+function carregarPDF(event){
+  var file=event.target.files[0];
+  if(!file)return;
+  var nome=file.name;
+  STATE.textoBaseNome=nome;
+  STATE.textoBase="Lendo PDF...";
+  save();renderApp();
+
+  // Use PDF.js to extract text properly
+  var reader=new FileReader();
+  reader.onload=function(e){
+    var typedArray=new Uint8Array(e.target.result);
+    // Configure PDF.js worker
+    if(window.pdfjsLib){
+      pdfjsLib.GlobalWorkerOptions.workerSrc="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js";
+      pdfjsLib.getDocument({data:typedArray}).promise.then(function(pdf){
+        var totalPages=pdf.numPages;
+        var textPromises=[];
+        for(var i=1;i<=Math.min(totalPages,10);i++){
+          textPromises.push(pdf.getPage(i).then(function(page){
+            return page.getTextContent().then(function(content){
+              return content.items.map(function(item){return item.str;}).join(" ");
+            });
+          }));
+        }
+        Promise.all(textPromises).then(function(pages){
+          var fullText=pages.join(" ").replace(/  +/g," ").trim();
+          if(fullText.length<50){
+            STATE.textoBase="[PDF carregado mas sem texto extraivel. Pode ser um PDF escaneado. Descricao: "+nome+"]";
+          } else {
+            STATE.textoBase=fullText.substring(0,3000);
+          }
+          STATE.textoBaseNome=nome;
+          save();renderApp();
+        });
+      }).catch(function(err){
+        STATE.textoBase="[Erro ao ler PDF: "+err.message+"]";
+        STATE.textoBaseNome=nome;
+        save();renderApp();
+      });
+    } else {
+      STATE.textoBase="[PDF carregado: "+nome+". Biblioteca PDF.js nao carregou - verifique sua conexao.]";
+      STATE.textoBaseNome=nome;
+      save();renderApp();
+    }
+  };
+  reader.readAsArrayBuffer(file);
+}
+
+function limparTextoBase(){
+  delete STATE.textoBase;
+  delete STATE.textoBaseNome;
+  save();renderApp();
+}
+
 
 function toggleDay(n){STATE.expanded[n]=!STATE.expanded[n];save();renderApp();}
 function markDone(c){STATE.done[c]=true;delete STATE.skipped[c];save();renderApp();}
